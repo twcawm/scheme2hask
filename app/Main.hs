@@ -30,10 +30,17 @@ parseAtom = do
         _ -> Atom atom --underscore here matches anything (wildcard)
 
 parseNumber :: Parser LispVal
-parseNumber = liftM (Number . read) $ many1 digit  --parse many digits.  apply "read" to this
+--parseNumber = liftM (Number . read) $ many1 digit  --parse many digits.  apply "read" to this
 --pass the result to Number constructor.  
 --we want this all to be inside of the Parser monad, (many1 digit produces a Parser String, not a String)
 --therefore liftM lifts this function into monad form
+--here is my attempt to rewrite parseNumber in do notation?
+parseNumber = do
+    --(return . Number . read) num
+    num <- many1 digit
+    let i0 = read num
+    let i1 = Number i0
+    return i1
 
 parseExpr :: Parser LispVal
 parseExpr = parseAtom --accept any of the following parsed types
