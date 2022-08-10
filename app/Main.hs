@@ -12,10 +12,25 @@ symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
 spaces :: Parser ()
 spaces = skipMany1 space
 
+--define a parser action that accepts a backslash followed by an escaped char
+escapedChars :: Parser Char
+escapedChars = do
+    char '\\' -- signifies the beginning of an escaped char (in haskell, we also can write a literal backslash char but have to escape it in the literal)
+    x <- oneOf "\\\"nrt" -- \\ is escaped backslash, \" is escaped doublequote
+    -- oneOf gets a single instance of either \ or "
+    return $ case x of
+        '\\' -> x
+        '"' -> x
+        'n' -> '\n'
+        'r' -> '\r'
+        't' -> '\t'
+
+
+
 parseString :: Parser LispVal
 parseString = do
     char '"'
-    x <- many (noneOf "\"")
+    x <- many $ escapedChars <|> noneOf "\"\\"
     char '"'
     return $ String x --String x constructs a LispVal, applying return to this creates a Parser LispVal
 
