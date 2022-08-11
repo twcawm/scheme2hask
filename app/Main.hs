@@ -178,13 +178,13 @@ showVal (DottedList head tail) = "(" ++ unwordsList head ++ " . " ++ showVal tai
 
 instance Show LispVal where show = showVal --declaring/defining LispVal to be an instance of Show typeclass
 
+readExpr :: String -> LispVal
 readExpr input = case parse parseExpr "lisp" input of
-    Left err -> "No match: " ++ show err
-    Right val -> "Found " ++ show val
+    Left err -> String $ "No match: " ++ show err
+    Right val -> val
 
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map showVal -- apply showVal to every LispVal in the list, then apply unwords to that list of strings
-
 
 data LispVal = Atom String
             | List [LispVal]
@@ -196,7 +196,11 @@ data LispVal = Atom String
             | Bool Bool
             | Character Char
 
+eval :: LispVal -> LispVal
+eval val@(String _) = val --this val@(String _) pattern matches any LispVal with the String constructor, binds "val" as a LispVal instead of just a bare String.
+eval val@(Number _) = val
+eval val@(Bool _) = val
+eval (List [Atom "quote", val]) = val --the eval of (quote val) AKA 'val is val
+
 main :: IO ()
-main = do
-    (expr:_) <- getArgs
-    putStrLn (readExpr expr)
+main = getArgs >>= print . eval . readExpr . head
