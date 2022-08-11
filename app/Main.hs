@@ -5,6 +5,7 @@ import Text.ParserCombinators.Parsec hiding (spaces)
 import System.Environment
 import Control.Monad
 import Numeric
+import Data.Ratio
 
 
 symbol :: Parser Char
@@ -54,6 +55,13 @@ parseFloat = do
     char '.'
     y <- many1 digit
     return $ Float (fst . head $ readFloat ( x ++ "." ++ y))
+
+parseRatio :: Parser LispVal
+parseRatio = do
+    x <- many1 digit
+    char '/'
+    y <- many1 digit
+    return $ Ratio ((read x) % (read y ))
 
 parseNumber :: Parser LispVal
 parseNumber = parseDecimal1 <|> parseDecimal2 <|> parseHex <|> parseOct <|> parseBin
@@ -107,6 +115,7 @@ bin2dig' digint (x:xs) = let old = 2 * digint + (if x == '0' then 0 else 1) in
 parseExpr :: Parser LispVal
 parseExpr = parseAtom --accept any of the following parsed types
         <|> parseString
+        <|> try parseRatio
         <|> try parseFloat
         <|> try parseNumber
         <|> try parseBool
@@ -135,6 +144,7 @@ data LispVal = Atom String
             | List [LispVal]
             | DottedList [LispVal] LispVal
             | Float Double
+            | Ratio Rational
             | Number Integer
             | String String
             | Bool Bool
