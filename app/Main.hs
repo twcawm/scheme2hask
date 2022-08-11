@@ -201,6 +201,39 @@ eval val@(String _) = val --this val@(String _) pattern matches any LispVal with
 eval val@(Number _) = val
 eval val@(Bool _) = val
 eval (List [Atom "quote", val]) = val --the eval of (quote val) AKA 'val is val
+eval (List (Atom func : args)) = apply func $ map eval args--evaluate all arguments (expressions past the first expression, which is function) then apply function to result
+
+apply :: String -> [LispVal] -> LispVal
+apply func args = maybe (Bool False) ($ args) $ lookup func primitives
+--($ x) = (\y -> y $ x) = flip ($) x
+--so ($ args) implicitly creates a lambda that applies its argument (a function) to args
+--lookup returns a Maybe function, i believe.
+--"maybe :: b -> (a -> b) -> Maybe a -> b"
+-- here, "b" default value is (Bool False)
+-- function (a->b) is ($ args), the lambda that applies its argument to args
+-- the Maybe value "Maybe a" is the result of "lookup func primitives"
+-- if that Maybe result is not Nothing, then maybe applies the function (previously mentioned lambda) to the value inside the Just
+
+primitives :: [(String, [LispVal] -> LispVal)]
+primitives = [("+", numericBinop (+)),
+  ("-", numericBinop (-)),
+  ("*", numericBinop (*)),
+  ("/", numericBinop div),
+  ("mod", numericBinop mod),
+  ("quotient", numericBinop quot),
+  ("remainder", numericBinop rem)]
+--numericBinop takes a primitive Haskell function and wraps it with the ability to unpack an argument list, apply the function to the values from that, and return a result of the Number constructor type
+numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> LispVal
+numericBinop op params = Number $ foldl1 op $ map unpackNum params
+
+unpackNum :: LispVal -> Integer
+unpackNum (Number n) = n
+unpackNum (String n) = let parsed = reads n :: [(Integer, String)] in 
+    if null parsed
+        then 0
+        else fst $ parsed !! 0
+unpackNum (List [n]) = unpackNum n
+unpackNum _ = 0
 
 main :: IO ()
 main = getArgs >>= print . eval . readExpr . head
