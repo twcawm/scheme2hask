@@ -232,6 +232,11 @@ unpackNum (String n) = let parsed = reads n :: [(Integer, String)] in
     if null parsed
         then 0
         else fst $ parsed !! 0
+        --the above is actually confusing.  reads is "equivalent to readsPrec with a precedence of 0."
+        --reads n is String -> [(a, String)]
+        --so applying  reads n to a String would give [(a,String)]
+        --and that is why we need to declare the type of 
+        --reads n :: [(Integer, String)]
 unpackNum (List [n]) = unpackNum n
 unpackNum _ = 0
 
