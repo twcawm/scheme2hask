@@ -166,10 +166,25 @@ parseQuoted = do
     x <- parseExpr
     return $ List [Atom "quote", x]
 
+showVal :: LispVal -> String --using pattern matching on LispVal data constructors to define showVal to convert LispVal to String
+showVal (String contents) = "\"" ++ contents ++ "\"" --for the String data constructor
+showVal (Atom name) = name --for the Atom data constructor
+showVal (Number contents) = show contents --show :: Show a => a -> String
+showVal (Bool True) = "#t" --here "Bool" is a LispVal data constructor, where True is a Haskell value True, and this tells showVal to match that input to the literal "#t"
+showVal (Bool False) = "#f" --note that this Bool cases are matching beyond simply the data constructor!  it matches the Bool data constructor and then further matches the value (True or False)!
+
+showVal (List contents) = "(" ++ unwordsList contents ++ ")"
+showVal (DottedList head tail) = "(" ++ unwordsList head ++ " . " ++ showVal tail ++ ")"
+
+instance Show LispVal where show = showVal --declaring/defining LispVal to be an instance of Show typeclass
 
 readExpr input = case parse parseExpr "lisp" input of
     Left err -> "No match: " ++ show err
-    Right val -> "Found value"
+    Right val -> "Found " ++ show val
+
+unwordsList :: [LispVal] -> String
+unwordsList = unwords . map showVal -- apply showVal to every LispVal in the list, then apply unwords to that list of strings
+
 
 data LispVal = Atom String
             | List [LispVal]
