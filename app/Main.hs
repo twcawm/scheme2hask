@@ -48,6 +48,13 @@ parseAtom = do
         "#f" -> Bool False
         _ -> Atom atom --underscore here matches anything (wildcard)
 
+parseFloat :: Parser LispVal
+parseFloat = do
+    x <- many1 digit
+    char '.'
+    y <- many1 digit
+    return $ Float (fst . head $ readFloat ( x ++ "." ++ y))
+
 parseNumber :: Parser LispVal
 parseNumber = parseDecimal1 <|> parseDecimal2 <|> parseHex <|> parseOct <|> parseBin
 --parseNumber = liftM (Number . read) $ many1 digit  --parse many digits.  apply "read" to this
@@ -100,9 +107,11 @@ bin2dig' digint (x:xs) = let old = 2 * digint + (if x == '0' then 0 else 1) in
 parseExpr :: Parser LispVal
 parseExpr = parseAtom --accept any of the following parsed types
         <|> parseString
+        <|> try parseFloat
         <|> try parseNumber
         <|> try parseBool
         <|> try parseCharacter
+
         --the "try" is needed because parseNumber, parseBool, and parseCharacter can all start with hash
 
 parseCharacter :: Parser LispVal
@@ -125,6 +134,7 @@ readExpr input = case parse parseExpr "lisp" input of
 data LispVal = Atom String
             | List [LispVal]
             | DottedList [LispVal] LispVal
+            | Float Double
             | Number Integer
             | String String
             | Bool Bool
