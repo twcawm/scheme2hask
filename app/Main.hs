@@ -100,8 +100,23 @@ bin2dig' digint (x:xs) = let old = 2 * digint + (if x == '0' then 0 else 1) in
 parseExpr :: Parser LispVal
 parseExpr = parseAtom --accept any of the following parsed types
         <|> parseString
-        <|> parseNumber
-        <|> parseBool
+        <|> try parseNumber
+        <|> try parseBool
+        <|> try parseCharacter
+        --the "try" is needed because parseNumber, parseBool, and parseCharacter can all start with hash
+
+parseCharacter :: Parser LispVal
+parseCharacter = do
+    try $ string "#\\"
+    value <- try (string "newline" <|> string "space")
+            <|> do 
+                x <- anyChar
+                notFollowedBy alphaNum
+                return [x]
+    return $ Character $ case value of
+        "space" -> ' '
+        "newline" -> '\n'
+        otherwise -> (value !! 0)
 
 readExpr input = case parse parseExpr "lisp" input of
     Left err -> "No match: " ++ show err
@@ -113,6 +128,7 @@ data LispVal = Atom String
             | Number Integer
             | String String
             | Bool Bool
+            | Character Char
 
 main :: IO ()
 main = do
