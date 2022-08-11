@@ -115,11 +115,20 @@ bin2dig' digint (x:xs) = let old = 2 * digint + (if x == '0' then 0 else 1) in
 parseExpr :: Parser LispVal
 parseExpr = parseAtom --accept any of the following parsed types
         <|> parseString
-        <|> try parseRatio
+        <|> try parseRatio --the "try" combinator allows backtracking.
+        --that is, it attempts to run the specified parser, but if that fails,
+        -- it backs up to the previous state.
+        -- therefore we can use it in a choice alternative without interfering with any other alternatives
         <|> try parseFloat
         <|> try parseNumber
         <|> try parseBool
         <|> try parseCharacter
+        <|> parseQuoted
+        <|> do
+            char '('
+            x <- try parseList <|> parseDottedList
+            char ')'
+            return x
 
         --the "try" is needed because parseNumber, parseBool, and parseCharacter can all start with hash
 
@@ -135,6 +144,28 @@ parseCharacter = do
         "space" -> ' '
         "newline" -> '\n'
         otherwise -> (value !! 0)
+
+parseList :: Parser LispVal
+parseList = liftM List $ sepBy parseExpr spaces
+--this is the List data constructor for LispVal
+--we liftM this into a Parser LispVal
+--sepBy p sep parses zero or more occurrences of p, separated by sep. Returns a list of values returned by p.
+
+parseDottedList :: Parser LispVal
+-- of the form (a b c d . f)
+-- so get 'a b c d ' as the "head"
+-- then get 'f' as the "tail"
+parseDottedList = do
+    head <- endBy parseExpr spaces --endBy p sep parses zero or more occurrences of p, separated and ended by sep. Returns a list of values returned by p.
+    tail <- char '.' >> spaces >> parseExpr --i think here we ignore the result of char '.' and spaces, and just bind the result of parseExpr to tail
+    return $ DottedList head tail
+
+parseQuoted :: Parser LispVal
+parseQuoted = do
+    char '\'' --syntactic sugar for (quote x)  is  'x
+    x <- parseExpr
+    return $ List [Atom "quote", x]
+
 
 readExpr input = case parse parseExpr "lisp" input of
     Left err -> "No match: " ++ show err
