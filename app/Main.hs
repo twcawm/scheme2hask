@@ -164,7 +164,7 @@ parseExpr = parseAtom --accept any of the following parsed types
 zparseList = do
   char '('
   zspaces
-  x <- parseList
+  x <- try parseList <|> parseListWS --tricky case ending list with sdf ) vs sdf)
   zspaces
   char ')'
   return x
@@ -194,7 +194,11 @@ parseCharacter = do
 
 parseList :: Parser LispVal
 parseList = do
-  head <- sepBy parseExpr spaces
+  head <- sepBy parseExpr spaces --if terminated by sdf), we're done here.
+  return $ List head
+parseListWS :: Parser LispVal
+parseListWS = do
+  head <- endBy parseExpr spaces --if terminated by sdf ), we're done here.
   return $ List head
 --this is the List data constructor for LispVal
 --we liftM this into a Parser LispVal
