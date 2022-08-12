@@ -274,7 +274,13 @@ primitives = [("+", numericBinop (+)),
   ("string<?", strBoolBinop (<)),
   ("string>?", strBoolBinop (>)),
   ("string<=?", strBoolBinop (<=)),
-  ("string>=?", strBoolBinop (>=))
+  ("string>=?", strBoolBinop (>=)),
+  ("car", car),
+  ("cdr", cdr),
+  ("cons", cons),
+  ("eq?", eqv),
+  ("eqv?", eqv),
+  ("equal?", equal)
   ]
 
 --generic binary boolean operation, we use this to more easily capture the various cases
@@ -321,6 +327,64 @@ unpackBool (Bool b) = return b
 unpackBool notBool  = throwError $ TypeMismatch "boolean" notBool
 
 data Unpacker = forall a. Eq a => AnyUnpacker (LispVal -> ThrowsError a)
+
+
+
+--list stuff (wow, car and cdr are such great names that everyone understands)
+car :: [LispVal] -> ThrowsError LispVal
+car [List (x : xs)] = return x
+car [DottedList (x : xs) _] = return x --Dotted list a [LispVal] LispVal - a list of LispVals, followed by another LispVal (captured as _ here)
+car [badArg] = throwError $ TypeMismatch "pair" badArg
+car badArgList = throwError $ NumArgs 1 badArgList
+
+cdr :: [LispVal] -> ThrowsError LispVal
+cdr [List (x : xs)] = return $ List xs
+cdr [DottedList [throwaway] x] = return x
+cdr [DottedList (throwaway : xs) x] = return $ DottedList xs x -- get rid of head of list, keep dotted structure
+cdr [badArg] = throwError $ TypeMismatch "pair" badArg
+cdr badArgList = throwError $ NumArgs 1 badArgList
+--(cdr '(4))     ;Value: () ........ do we handle this case correctly?
+
+cons :: [LispVal] -> ThrowsError LispVal
+cons [x1, List []] = return $ List [x1] --cons'ing x1 with an empty list lulz.  but we see it works: scheme: (cons 5 '())    ;Value: (5)
+cons [x, List xs] = return $ List $ x : xs
+cons [x, DottedList xs xlast] = return $ DottedList (x : xs) xlast --(cdr '(4 5 6 . 7))    ;Value: (5 6 . 7)
+cons [x1, x2] = return $ DottedList [x1] x2 --(cons 5 6)    ;Value: (5 . 6)
+cons badArgList = throwError $ NumArgs 2 badArgList --cons more or less than 2 things is an error
+
+--equivalence: scheme has (eqv? obj1 obj2), (eq? obj1 obj2) , and (equal? obj1 obj2)
+--eq? is the finest or most discriminating, and equal? is the coarsest. eqv? is slightly less discriminating than eq?.
+eqv :: [LispVal] -> ThrowsError LispVal
+eqv [(Bool arg1), (Bool arg2)] = return $ Bool $ arg1 == arg2 --pretty obvious
+eqv [(Number arg1), (Number arg2)] = return $ Bool $ arg1 == arg2 --pretty obvious
+eqv [(String arg1), (String arg2)] = return $ Bool $ arg1 == arg2 --wait are these all just gonna be pretty obvious
+eqv [(Atom arg1), (Atom arg2)] = return $ Bool $ arg1 == arg2 --ok maybe these are all rly obvious
+eqv [(DottedList xs x), (DottedList ys y)] = eqv [List $ xs ++ [x], List $ ys ++ [y]] --ah , just as i thought , this one is more complex.  recurses down to the List case tho.
+eqv [(List arg1), (List arg2)] = return $ Bool $ (length arg1 == length arg2) && (all eqvPair $ zip arg1 arg2) --first, check of lengths equal.  then check of all values are ... all... eqvPair :)
+    where eqvPair (x1, x2) = case eqv [x1, x2] of   Left err -> False --recurse to apply eqv to a list of 2 LispVals
+                                                    Right (Bool val) -> val
+eqv [_, _] = return $ Bool False
+eqv badArgList = throwError $ NumArgs 2 badArgList
+
+--equal? , being the coarsest equivalence relation, should ignore type tags (if possible) & thus be "weakly typed" meh
+unpackEquals :: LispVal -> LispVal -> Unpacker -> ThrowsError Bool
+unpackEquals arg1 arg2 (AnyUnpacker unpacker) = 
+    do 
+        unpacked1 <- unpacker arg1
+        unpacked2 <- unpacker arg2
+        return $ unpacked1 == unpacked2 --unpacked1==unpacked2 bool, this is lifted into ThrowsError
+    `catchError` (const $ return False)
+    --catchError :: MonadError e m => m a -> (e -> m a) -> m a
+--takes an Either action and a function that turns an error into another Either action.
+--here we use it as an infix between the result of the 'do' block there and a (const $ return False) where return is lifting to ThrowsError monad
+equal :: [LispVal] -> ThrowsError LispVal
+equal [arg1, arg2] = do
+    primitiveEquals <- liftM or $ mapM (unpackEquals arg1 arg2) [AnyUnpacker unpackNum, AnyUnpacker unpackStr, AnyUnpacker unpackBool]
+    eqvEquals <- eqv [arg1, arg2] -- want True on a superset of eqv true.  so use eqv directly out of laziness.
+    return $ Bool $ (primitiveEquals || let (Bool x) = eqvEquals in x)
+equal badArgList = throwError $ NumArgs 2 badArgList
+--ok so the first line of that "do" block: see if the things evaluate as equal from any possible unpacking (that is the "or").  the list literal is the list of unpackers tried, and the function is the partially-applied (to the values in equations) unpackEquals
+--third line looks confusing.  it pattern matches using (Bool x) to extract the result of the eqvEquals binding.  then lifts this result as a ThrowsError Bool (Bool is a LispVal data constructor)
 
 main :: IO ()
 main = do
