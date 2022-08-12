@@ -8,7 +8,38 @@ import Control.Monad
 import Numeric
 import Data.Ratio
 import Control.Monad.Except
+import System.IO
 
+
+flushStr :: String -> IO () --print out a string.  flush the buffer if needed
+flushStr str = putStr str >> hFlush stdout
+
+readPrompt :: String -> IO String
+readPrompt prompt = flushStr prompt >> getLine
+
+evalString :: String -> IO String
+evalString expr = return $ extractValue $ trapError (liftM show $ readExpr expr >>= eval) --liftM :: Monad m => (a1 -> r) -> m a1 -> m r.  so we apply liftM to (show) which is of type (Show a => a -> String).  the monad is related to error, i think.
+--throwsError LispVal is the type of eval
+--show : showError :: LispError -> String
+-- liftM must lift show into throwsError LispError -> throwsError String i guess
+--type ThrowsError = Either LispError
+--trapError :: (MonadError e m, Show e) => m String -> m String
+--extractValue :: extractValue :: ThrowsError a -> a (here, i guess it's a String)
+--return:: lift it into IO string
+
+evalAndPrint :: String -> IO ()
+evalAndPrint expr = evalString expr >>= putStrLn
+
+until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
+until_ pred prompt action = do 
+    result <- prompt
+    if pred result --predicate that signals when to stop
+        then return () 
+        --if not stop, then apply action to the prompt thing, then loop
+        else action result >> until_ pred prompt action --if not stop, loop (here looping by recursing)
+
+runRepl :: IO ()
+runRepl = until_ (== "quit") (readPrompt "scheme2hask:>>> ") evalAndPrint
 
 data LispError = NumArgs Integer [LispVal]
     | TypeMismatch String LispVal
@@ -381,13 +412,16 @@ equal :: [LispVal] -> ThrowsError LispVal
 equal [arg1, arg2] = do
     primitiveEquals <- liftM or $ mapM (unpackEquals arg1 arg2) [AnyUnpacker unpackNum, AnyUnpacker unpackStr, AnyUnpacker unpackBool]
     eqvEquals <- eqv [arg1, arg2] -- want True on a superset of eqv true.  so use eqv directly out of laziness.
+    --but note that this laziness is bad.  bc now eqv will recurse into recursed lists, instead of 'equal'.  so this would be something to improve in the future.
     return $ Bool $ (primitiveEquals || let (Bool x) = eqvEquals in x)
 equal badArgList = throwError $ NumArgs 2 badArgList
 --ok so the first line of that "do" block: see if the things evaluate as equal from any possible unpacking (that is the "or").  the list literal is the list of unpackers tried, and the function is the partially-applied (to the values in equations) unpackEquals
 --third line looks confusing.  it pattern matches using (Bool x) to extract the result of the eqvEquals binding.  then lifts this result as a ThrowsError Bool (Bool is a LispVal data constructor)
 
 main :: IO ()
-main = do
+main = do 
     args <- getArgs
-    evaled <- return $ liftM show $ readExpr ( args !! 0 ) >>= eval
-    putStrLn $ extractValue $ trapError evaled
+    case length args of
+        0 -> runRepl --if no arguments, enter REPL!
+        1 -> evalAndPrint $ args !! 0 --if argument, eval and print it.
+        otherwise -> putStrLn "Program takes only 0 or 1 argument"
