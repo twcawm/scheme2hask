@@ -1,3 +1,4 @@
+{-# LANGUAGE ExistentialQuantification #-}
 module Main where
 
 import Lib
@@ -231,6 +232,12 @@ eval val@(String _) = return val --this val@(String _) pattern matches any LispV
 eval val@(Number _) = return val
 eval val@(Bool _) = return val
 eval (List [Atom "quote", val]) = return val --the eval of (quote val) AKA 'val is val
+eval (List [Atom "if", pred, conseq, alt]) = 
+     do 
+        result <- eval pred
+        case result of --the last statement (this case statement) in a do block will be the overall result of the do block.  eval either alt or conseq based on value of eval pred
+             Bool False -> eval alt
+             otherwise  -> eval conseq
 eval (List (Atom func : args)) = mapM eval args >>= apply func --evaluate all arguments (expressions past the first expression, which is function) then apply function to result
 eval badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
@@ -254,7 +261,35 @@ primitives = [("+", numericBinop (+)),
   ("/", numericBinop div),
   ("mod", numericBinop mod),
   ("quotient", numericBinop quot),
-  ("remainder", numericBinop rem)]
+  ("remainder", numericBinop rem),
+  ("=", numBoolBinop (==)),
+  ("<", numBoolBinop (<)),
+  (">", numBoolBinop (>)),
+  ("/=", numBoolBinop (/=)),
+  (">=", numBoolBinop (>=)),
+  ("<=", numBoolBinop (<=)),
+  ("&&", boolBoolBinop (&&)),
+  ("||", boolBoolBinop (||)),
+  ("string=?", strBoolBinop (==)),
+  ("string<?", strBoolBinop (<)),
+  ("string>?", strBoolBinop (>)),
+  ("string<=?", strBoolBinop (<=)),
+  ("string>=?", strBoolBinop (>=))
+  ]
+
+--generic binary boolean operation, we use this to more easily capture the various cases
+boolBinop :: (LispVal -> ThrowsError a) -> (a -> a -> Bool) -> [LispVal] -> ThrowsError LispVal
+boolBinop unpacker op args = if length args /= 2
+    then throwError $ NumArgs 2 args
+    else do --this do block is for the Error monad (stuff can throw a type mismatch)
+        left <- unpacker $ args !! 0
+        right <- unpacker $ args !! 1
+        return $ Bool $ left `op` right --`infix version` of a function like <= etc
+
+numBoolBinop = boolBinop unpackNum
+strBoolBinop = boolBinop unpackStr
+boolBoolBinop = boolBinop unpackBool
+
 --numericBinop takes a primitive Haskell function and wraps it with the ability to unpack an argument list, apply the function to the values from that, and return a result of the Number constructor type
 numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> ThrowsError LispVal
 numericBinop op [] = throwError $ NumArgs 2 []
@@ -274,6 +309,18 @@ unpackNum (String n) = let parsed = reads n in
         --reads n :: [(Integer, String)]
 unpackNum (List [n]) = unpackNum n
 unpackNum notNum = throwError $ TypeMismatch "number" notNum
+
+unpackStr :: LispVal -> ThrowsError String
+unpackStr (String s) = return s
+unpackStr (Number s) = return $ show s --silently convert non string to string representation
+unpackStr (Bool s)   = return $ show s --silently convert non string to string representation
+unpackStr notString  = throwError $ TypeMismatch "string" notString
+
+unpackBool :: LispVal -> ThrowsError Bool
+unpackBool (Bool b) = return b
+unpackBool notBool  = throwError $ TypeMismatch "boolean" notBool
+
+data Unpacker = forall a. Eq a => AnyUnpacker (LispVal -> ThrowsError a)
 
 main :: IO ()
 main = do
