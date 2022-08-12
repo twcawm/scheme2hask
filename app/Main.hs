@@ -45,6 +45,9 @@ symbol = oneOf "!$%&|*+-/:<=>?@^_~"
 spaces :: Parser ()
 spaces = skipMany1 space
 
+zspaces :: Parser ()
+zspaces = skipMany space
+
 --define a parser action that accepts a backslash followed by an escaped char
 escapedChars :: Parser Char
 escapedChars = do
@@ -155,11 +158,24 @@ parseExpr = parseAtom --accept any of the following parsed types
         <|> try parseBool
         <|> try parseCharacter
         <|> parseQuoted
-        <|> do
-            char '('
-            x <- try parseList <|> parseDottedList
-            char ')'
-            return x
+        <|> try zparseList 
+        <|> try zparseDottedList
+
+zparseList = do
+  char '('
+  zspaces
+  x <- parseList
+  zspaces
+  char ')'
+  return x
+
+zparseDottedList = do
+  char '('
+  zspaces
+  x <- parseDottedList
+  zspaces
+  char ')'
+  return x
 
         --the "try" is needed because parseNumber, parseBool, and parseCharacter can all start with hash
 
@@ -177,7 +193,9 @@ parseCharacter = do
         otherwise -> (value !! 0)
 
 parseList :: Parser LispVal
-parseList = liftM List $ sepBy parseExpr spaces
+parseList = do
+  head <- sepBy parseExpr spaces
+  return $ List head
 --this is the List data constructor for LispVal
 --we liftM this into a Parser LispVal
 --sepBy p sep parses zero or more occurrences of p, separated by sep. Returns a list of values returned by p.
