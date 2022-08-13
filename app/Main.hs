@@ -7,9 +7,75 @@ import System.Environment
 import Control.Monad
 import Numeric
 import Data.Ratio
-import Control.Monad.Except
+import Control.Monad.Except --we are basically using a super-set of the Either monad to handle errors.
+--note: "It is common to use Either String as the monad type constructor for an error monad in which error descriptions take the form of strings. In that case and many other common cases the resulting monad is already defined as an instance of the MonadError class.
+-- i think here, it's quite similar, tho we're using Either LispVal, and our LispVal is an instance of Show, so pretty similar
 import System.IO
+import Data.IORef --for storing state, like the arbitrarily nested environment
 
+type Env = IORef [(String, IORef LispVal)] --mappings from string to (mutable) values
+-- in scheme, (set! changes the value of a variable
+-- and (define adds a new string,value pair to env
+
+nullEnv :: IO Env
+nullEnv = newIORef []
+
+type IOThrowsError = ExceptT LispError IO --ExceptT is a monad transformer.  we combine multiple monads.
+--we layer error handling (LispError) on top of the IO monad.
+--Like ThrowsError, IOThrowsError is really a type constructor: we've left off the last argument, the return type of the function
+--a monad that may contain IO actions that throw a LispError
+--We have a mix of ThrowsError and IOThrowsError functions, but actions of different types cannot be contained within the same do-block, even if they provide essentially the same functionality
+
+liftThrows :: ThrowsError a -> IOThrowsError a --destructures the Either type and either re-throws the error type (superset of Either, basically) or returns the ordinary value
+liftThrows (Left err) = throwError err
+liftThrows (Right val) = return val
+
+runIOThrows :: IOThrowsError String -> IO String
+runIOThrows action = runExceptT (trapError action) >>= return . extractValue
+--take any error values and convert them to their string representations
+--runExceptT :: ExceptT e m a -> m (Either e a)Source# The inverse of ExceptT.
+--newtype ExceptT e m a
+--A monad transformer that adds exceptions to other monads.
+--ExceptT constructs a monad parameterized over two things:
+--e - The exception type.
+--m - The inner monad.
+--so, runExceptT is probably a way to get at the "inner" monad
+---- | Map the unwrapped computation using the given function.
+
+
+isBound :: Env -> String -> IO Bool --is a given variable already bound in the given environment?
+isBound envRef var = readIORef envRef >>= return . maybe False (const True) . lookup var
+
+getVar :: Env -> String -> IOThrowsError LispVal
+getVar envRef var  =  do 
+    env <- liftIO $ readIORef envRef
+    maybe (throwError $ UnboundVar "uh-oh, unbound variable" var) (liftIO . readIORef) (lookup var env)
+
+setVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+setVar envRef var value = do 
+    env <- liftIO $ readIORef envRef
+    maybe (throwError $ UnboundVar "uh-oh, an unbound variable" var) (liftIO . (flip writeIORef value)) (lookup var env)
+    return value
+
+defineVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+defineVar envRef var value = do
+    alreadyDefined <- liftIO $ isBound envRef var
+    if alreadyDefined
+        then setVar envRef var value >> return value --var already bound, so update its value
+        else liftIO $ do
+            valueRef <- newIORef value
+            env <- readIORef envRef
+            writeIORef envRef ((var, valueRef) : env) -- i think this is where the rubber meets the rode, we're adding the new var, valueRef pair here
+            return value
+
+--list version of defineVar, i think.  defines bunch of vars from the list at once
+bindVars :: Env -> [(String, LispVal)] -> IO Env
+bindVars envRef bindings = readIORef envRef >>= extendEnv bindings >>= newIORef
+    where 
+        extendEnv bindings env = liftM (++ env) (mapM addBinding bindings)
+        addBinding (var, value) = do 
+            ref <- newIORef value
+            return (var, ref)
 
 flushStr :: String -> IO () --print out a string.  flush the buffer if needed
 flushStr str = putStr str >> hFlush stdout
@@ -17,8 +83,8 @@ flushStr str = putStr str >> hFlush stdout
 readPrompt :: String -> IO String
 readPrompt prompt = flushStr prompt >> getLine
 
-evalString :: String -> IO String
-evalString expr = return $ extractValue $ trapError (liftM show $ readExpr expr >>= eval) --liftM :: Monad m => (a1 -> r) -> m a1 -> m r.  so we apply liftM to (show) which is of type (Show a => a -> String).  the monad is related to error, i think.
+evalString :: Env -> String -> IO String
+evalString env expr = runIOThrows $ liftM show $ (liftThrows $ readExpr expr) >>= eval env --liftM :: Monad m => (a1 -> r) -> m a1 -> m r.  so we apply liftM to (show) which is of type (Show a => a -> String).  the monad is related to error, i think.
 --throwsError LispVal is the type of eval
 --show : showError :: LispError -> String
 -- liftM must lift show into throwsError LispError -> throwsError String i guess
@@ -27,8 +93,8 @@ evalString expr = return $ extractValue $ trapError (liftM show $ readExpr expr 
 --extractValue :: extractValue :: ThrowsError a -> a (here, i guess it's a String)
 --return:: lift it into IO string
 
-evalAndPrint :: String -> IO ()
-evalAndPrint expr = evalString expr >>= putStrLn
+evalAndPrint :: Env -> String -> IO ()
+evalAndPrint env expr =  evalString env expr >>= putStrLn
 
 until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
 until_ pred prompt action = do 
@@ -38,8 +104,11 @@ until_ pred prompt action = do
         --if not stop, then apply action to the prompt thing, then loop
         else action result >> until_ pred prompt action --if not stop, loop (here looping by recursing)
 
+runOne :: String -> IO ()
+runOne expr = nullEnv >>= flip evalAndPrint expr
+
 runRepl :: IO ()
-runRepl = until_ (== "quit") (readPrompt "scheme2hask:>>> ") evalAndPrint
+runRepl = nullEnv >>= until_ (== "quit") (readPrompt "scheme2hask:>>> ") . evalAndPrint
 
 data LispError = NumArgs Integer [LispVal]
     | TypeMismatch String LispVal
@@ -258,19 +327,23 @@ data LispVal = Atom String
             | Bool Bool
             | Character Char
 
-eval :: LispVal -> ThrowsError LispVal
-eval val@(String _) = return val --this val@(String _) pattern matches any LispVal with the String constructor, binds "val" as a LispVal instead of just a bare String.
-eval val@(Number _) = return val
-eval val@(Bool _) = return val
-eval (List [Atom "quote", val]) = return val --the eval of (quote val) AKA 'val is val
-eval (List [Atom "if", pred, conseq, alt]) = 
-     do 
-        result <- eval pred
-        case result of --the last statement (this case statement) in a do block will be the overall result of the do block.  eval either alt or conseq based on value of eval pred
-             Bool False -> eval alt
-             otherwise  -> eval conseq
-eval (List (Atom func : args)) = mapM eval args >>= apply func --evaluate all arguments (expressions past the first expression, which is function) then apply function to result
-eval badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
+--have to update eval from ThrowsError (monad) to IOThrowsError (from monad transformer)
+eval :: Env -> LispVal -> IOThrowsError LispVal
+eval env val@(String _) = return val--this val@(String _) pattern matches any LispVal with the String constructor, binds "val" as a LispVal instead of just a bare String.
+eval env val@(Number _) = return val
+eval env val@(Bool _) = return val
+eval env (Atom id) = getVar env id
+eval env (List [Atom "quote", val]) = return val --the eval of (quote val) AKA 'val is val
+eval env (List [Atom "if", pred, conseq, alt]) =
+    do 
+        result <- eval env pred
+        case result of--the last statement (this case statement) in a do block will be the overall result of the do block.  eval either alt or conseq based on value of eval pred
+            Bool False -> eval env alt
+            otherwise -> eval env conseq
+eval env (List [Atom "set!", Atom var, form]) = eval env form >>= setVar env var
+eval env (List [Atom "define", Atom var, form]) = eval env form >>= defineVar env var
+eval env (List (Atom func : args)) = mapM (eval env) args >>= liftThrows . apply func
+eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 apply :: String -> [LispVal] -> ThrowsError LispVal
 apply func args = maybe (throwError $ NotFunction "Unrecognized primitive function args" func)
@@ -423,5 +496,5 @@ main = do
     args <- getArgs
     case length args of
         0 -> runRepl --if no arguments, enter REPL!
-        1 -> evalAndPrint $ args !! 0 --if argument, eval and print it.
+        1 -> runOne $ args !! 0 --if argument, eval and print it.
         otherwise -> putStrLn "Program takes only 0 or 1 argument"
