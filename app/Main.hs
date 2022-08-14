@@ -52,6 +52,8 @@ getVar envRef var  =  do
     maybe (throwError $ UnboundVar "uh-oh, unbound variable" var) (liftIO . readIORef) (lookup var env)
 
 setVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+--note: setVar is a big difference between Scheme (which has set! and mutable state) and Haskell (which ... does not... have mutable state)
+--we use IORef to provide "mutable references in the IO monad" to work around this need for representing mutable state
 setVar envRef var value = do 
     env <- liftIO $ readIORef envRef
     maybe (throwError $ UnboundVar "uh-oh, an unbound variable" var) (liftIO . (flip writeIORef value)) (lookup var env)
@@ -105,10 +107,10 @@ until_ pred prompt action = do
         else action result >> until_ pred prompt action --if not stop, loop (here looping by recursing)
 
 runOne :: String -> IO ()
-runOne expr = nullEnv >>= flip evalAndPrint expr
+runOne expr = primitiveBindings >>= flip evalAndPrint expr
 
 runRepl :: IO ()
-runRepl = nullEnv >>= until_ (== "quit") (readPrompt "scheme2hask:>>> ") . evalAndPrint
+runRepl = primitiveBindings >>= until_ (== "quit") (readPrompt "scheme2hask:>>> ") . evalAndPrint
 
 data LispError = NumArgs Integer [LispVal]
     | TypeMismatch String LispVal
@@ -306,6 +308,13 @@ showVal (Bool False) = "#f" --note that this Bool cases are matching beyond simp
 
 showVal (List contents) = "(" ++ unwordsList contents ++ ")"
 showVal (DottedList head tail) = "(" ++ unwordsList head ++ " . " ++ showVal tail ++ ")"
+showVal (PrimitiveFunc _ ) = "<primitive>" --for brevity, only show the fact that the value is a primitive.
+--note: in the following, the LHSs inside the {} are the record attributes of LispVal FunFunc, and the RHS are holding their values!  so it's like a backwards-assignment (the right-hand-side gets the value starting in the LHS) compared to something like C++
+showVal (Func {params = args, vararg = varargs, body = body, closure = env}) = 
+    "(lambda (" ++ unwords (map show args ) ++ (case varargs of
+        Nothing -> ""
+        Just arg -> " . " ++ arg) ++ ") ...)"
+        --if there's a variadic argument, show it after a dot
 
 instance Show LispVal where show = showVal --declaring/defining LispVal to be an instance of Show typeclass
 
@@ -326,6 +335,16 @@ data LispVal = Atom String
             | String String
             | Bool Bool
             | Character Char
+            | PrimitiveFunc ([LispVal] -> ThrowsError LispVal)
+            | Func { params :: [String], vararg :: (Maybe String), body :: [LispVal], closure :: Env} 
+            --using "record syntax" lets us store data kinda like key-value store or attributes.  more easily keeps track of the info that we wanna store.
+            --note that we are storing the function body as a list of LispVal (list of expressions, since expressions are essentially LispVal)
+            --vararg is, if the function is variadic, the name of the variable holding the list of parameters for the variadic part.
+
+--helper functions for evaluating function definitions ((define ...) and (lambda ...))   
+makeFunc varargs env params body = return $ Func (map showVal params) varargs body env
+makeNormalFunc = makeFunc Nothing
+makeVarArgs = makeFunc . Just . showVal
 
 --have to update eval from ThrowsError (monad) to IOThrowsError (from monad transformer)
 eval :: Env -> LispVal -> IOThrowsError LispVal
@@ -342,21 +361,50 @@ eval env (List [Atom "if", pred, conseq, alt]) =
             otherwise -> eval env conseq
 eval env (List [Atom "set!", Atom var, form]) = eval env form >>= setVar env var
 eval env (List [Atom "define", Atom var, form]) = eval env form >>= defineVar env var
-eval env (List (Atom func : args)) = mapM (eval env) args >>= liftThrows . apply func
+--following are evaluations of function definition expressions
+--the compiler actually gives warning: [-Woverlapping-patterns] Pattern match is redundant
+--  i fixed this by moving the pattern for function application down after these.  maybe it gets caught in function application, essentially matching "define" or "lambda" as a function to apply.  that does sound like it could be potentially bad...
+eval env (List (Atom "define" : List (Atom var : params) : body)) =
+    makeNormalFunc env params body >>= defineVar env var
+eval env (List (Atom "define" : DottedList (Atom var : params) varargs : body)) =
+    makeVarArgs varargs env params body >>= defineVar env var
+eval env (List (Atom "lambda" : List params : body)) =
+    makeNormalFunc env params body
+eval env (List (Atom "lambda" : DottedList params varargs : body)) =
+    makeVarArgs varargs env params body
+eval env (List (Atom "lambda" : varargs@(Atom _) : body)) =
+    makeVarArgs varargs env [] body
+
+eval env (List (function : args)) = do --function application.  one eval covers everything!
+    func <- eval env function
+    argVals <- mapM (eval env) args
+    apply func argVals
+
 eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
-apply :: String -> [LispVal] -> ThrowsError LispVal
-apply func args = maybe (throwError $ NotFunction "Unrecognized primitive function args" func)
-    ($ args) 
-    (lookup func primitives)
---($ x) = (\y -> y $ x) = flip ($) x
---so ($ args) implicitly creates a lambda that applies its argument (a function) to args
---lookup returns a Maybe function, i believe.
---"maybe :: b -> (a -> b) -> Maybe a -> b"
--- here, "b" default value is (Bool False)
--- function (a->b) is ($ args), the lambda that applies its argument to args
--- the Maybe value "Maybe a" is the result of "lookup func primitives"
--- if that Maybe result is not Nothing, then maybe applies the function (previously mentioned lambda) to the value inside the Just
+apply :: LispVal -> [LispVal] -> IOThrowsError LispVal
+apply (PrimitiveFunc func) args = liftThrows $ func args
+apply (Func params varargs body closure) args =
+    if (num params /= num args) && (varargs == Nothing) --need number of params (formals) to be equal to the number of args we're applying it to.
+        --note that this indicates that in Scheme we are not rly supporting partially applying functions / 'currying'
+        --btw, we might not be fully error checking here.  to me it looks like the above only checks whether the numargs==numparams IF varargs is not present.  if varargs is present, we should ideally check that the args >= totalParams.
+            --the resulting error checking might be done in the "drop (length params) args" function
+        then throwError $ NumArgs (num params) args
+        else (liftIO $ bindVars closure $ zip params args) >>= bindVarArgs varargs >>= evalBody
+        --first, bind the multiple parameter-argument pairs to the closure environment.  pass that env along to bind the possible variadic argument.  then pass that env along to evalBody!
+    where 
+        remainingArgs = drop (length params) args --get remaining args after parameters are matched
+        num = toInteger . length
+        evalBody env = liftM last $ mapM (eval env) body --recall, body is a list of LispVal.  we're mapping eval, with the closure env, to every LispVal in this list.  then the result is the last expression eval'd in that list.
+        bindVarArgs arg env = case arg of
+            Just argName -> liftIO $ bindVars env [(argName, List $ remainingArgs)] --bind the variadic parameter name to the list of remaining args
+            Nothing -> return env --pass the env through unchanged
+
+primitiveBindings :: IO Env --create the IO Env values from the original list of primitives (which themselves are just tuples of (String, [LispVal] -> ThrowsError LispVal)
+primitiveBindings = nullEnv >>= (flip bindVars $ map makePrimitiveFunc primitives)
+    where 
+        makePrimitiveFunc (var, func) = (var, PrimitiveFunc func)
+        --start with nullEnv (empty environment), and bind all the primitives we defined to it.
 
 primitives :: [(String, [LispVal] -> ThrowsError LispVal)]
 primitives = [("+", numericBinop (+)),
