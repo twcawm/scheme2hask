@@ -157,3 +157,402 @@
 ---
 >         1 -> runOne $ args !! 0 --if argument, eval and print it.
 >         otherwise -> putStrLn "Program takes only 0 or 1 argument"
+10,116c10
+< import Control.Monad.Except --we are basically using a super-set of the Either monad to handle errors.
+< --note: "It is common to use Either String as the monad type constructor for an error monad in which error descriptions take the form of strings. In that case and many other common cases the resulting monad is already defined as an instance of the MonadError class.
+< -- i think here, it's quite similar, tho we're using Either LispVal, and our LispVal is an instance of Show, so pretty similar
+< import System.IO
+< import Data.IORef --for storing state, like the arbitrarily nested environment
+< 
+< type Env = IORef [(String, IORef LispVal)] --mappings from string to (mutable) values
+< -- in scheme, (set! changes the value of a variable
+< -- and (define adds a new string,value pair to env
+< 
+< nullEnv :: IO Env
+< nullEnv = newIORef []
+< 
+< type IOThrowsError = ExceptT LispError IO --ExceptT is a monad transformer.  we combine multiple monads.
+< --we layer error handling (LispError) on top of the IO monad.
+< --Like ThrowsError, IOThrowsError is really a type constructor: we've left off the last argument, the return type of the function
+< --a monad that may contain IO actions that throw a LispError
+< --We have a mix of ThrowsError and IOThrowsError functions, but actions of different types cannot be contained within the same do-block, even if they provide essentially the same functionality
+< 
+< liftThrows :: ThrowsError a -> IOThrowsError a --destructures the Either type and either re-throws the error type (superset of Either, basically) or returns the ordinary value
+< liftThrows (Left err) = throwError err
+< liftThrows (Right val) = return val
+< 
+< runIOThrows :: IOThrowsError String -> IO String
+< runIOThrows action = runExceptT (trapError action) >>= return . extractValue
+< --take any error values and convert them to their string representations
+< --runExceptT :: ExceptT e m a -> m (Either e a)Source# The inverse of ExceptT.
+< --newtype ExceptT e m a
+< --A monad transformer that adds exceptions to other monads.
+< --ExceptT constructs a monad parameterized over two things:
+< --e - The exception type.
+< --m - The inner monad.
+< --so, runExceptT is probably a way to get at the "inner" monad
+< ---- | Map the unwrapped computation using the given function.
+< 
+< 
+< isBound :: Env -> String -> IO Bool --is a given variable already bound in the given environment?
+< isBound envRef var = readIORef envRef >>= return . maybe False (const True) . lookup var
+< 
+< getVar :: Env -> String -> IOThrowsError LispVal
+< getVar envRef var  =  do 
+<     env <- liftIO $ readIORef envRef
+<     maybe (throwError $ UnboundVar "uh-oh, unbound variable" var) (liftIO . readIORef) (lookup var env)
+< 
+< setVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+< --note: setVar is a big difference between Scheme (which has set! and mutable state) and Haskell (which ... does not... have mutable state)
+< --we use IORef to provide "mutable references in the IO monad" to work around this need for representing mutable state
+< setVar envRef var value = do 
+<     env <- liftIO $ readIORef envRef
+<     maybe (throwError $ UnboundVar "uh-oh, an unbound variable" var) (liftIO . (flip writeIORef value)) (lookup var env)
+<     return value
+< 
+< defineVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+< defineVar envRef var value = do
+<     alreadyDefined <- liftIO $ isBound envRef var
+<     if alreadyDefined
+<         then setVar envRef var value >> return value --var already bound, so update its value
+<         else liftIO $ do
+<             valueRef <- newIORef value
+<             env <- readIORef envRef
+<             writeIORef envRef ((var, valueRef) : env) -- i think this is where the rubber meets the rode, we're adding the new var, valueRef pair here
+<             return value
+< 
+< --list version of defineVar, i think.  defines bunch of vars from the list at once
+< bindVars :: Env -> [(String, LispVal)] -> IO Env
+< bindVars envRef bindings = readIORef envRef >>= extendEnv bindings >>= newIORef
+<     where 
+<         extendEnv bindings env = liftM (++ env) (mapM addBinding bindings)
+<         addBinding (var, value) = do 
+<             ref <- newIORef value
+<             return (var, ref)
+< 
+< flushStr :: String -> IO () --print out a string.  flush the buffer if needed
+< flushStr str = putStr str >> hFlush stdout
+< 
+< readPrompt :: String -> IO String
+< readPrompt prompt = flushStr prompt >> getLine
+< 
+< evalString :: Env -> String -> IO String
+< evalString env expr = runIOThrows $ liftM show $ (liftThrows $ readExpr expr) >>= eval env --liftM :: Monad m => (a1 -> r) -> m a1 -> m r.  so we apply liftM to (show) which is of type (Show a => a -> String).  the monad is related to error, i think.
+< --throwsError LispVal is the type of eval
+< --show : showError :: LispError -> String
+< -- liftM must lift show into throwsError LispError -> throwsError String i guess
+< --type ThrowsError = Either LispError
+< --trapError :: (MonadError e m, Show e) => m String -> m String
+< --extractValue :: extractValue :: ThrowsError a -> a (here, i guess it's a String)
+< --return:: lift it into IO string
+< 
+< evalAndPrint :: Env -> String -> IO ()
+< evalAndPrint env expr =  evalString env expr >>= putStrLn
+< 
+< until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
+< until_ pred prompt action = do 
+<     result <- prompt
+<     if pred result --predicate that signals when to stop
+<         then return () 
+<         --if not stop, then apply action to the prompt thing, then loop
+<         else action result >> until_ pred prompt action --if not stop, loop (here looping by recursing)
+< 
+< --updating runOne to take name of a file to execute & run that as a program
+< runOne :: [String] -> IO ()
+< runOne args = do
+<     env <- primitiveBindings >>= flip bindVars [("args", List $ map String $ drop 1 args)] 
+<     (runIOThrows $ liftM show $ eval env (List [Atom "load", String (args !! 0)])) 
+<         >>= hPutStrLn stderr
+< --runOne :: String -> IO ()
+< --runOne expr = primitiveBindings >>= flip evalAndPrint expr
+---
+> import Control.Monad.Except
+118,119d11
+< runRepl :: IO ()
+< runRepl = primitiveBindings >>= until_ (== "quit") (readPrompt "scheme2hask:>>> ") . evalAndPrint
+155a48,50
+> zspaces :: Parser ()
+> zspaces = skipMany space
+> 
+266,270c161,178
+<         <|> do
+<             char '('
+<             x <- try parseList <|> parseDottedList
+<             char ')'
+<             return x
+---
+>         <|> try zparseList 
+>         <|> try zparseDottedList
+> 
+> zparseList = do
+>   char '('
+>   zspaces
+>   x <- try parseList <|> parseListWS --tricky case ending list with sdf ) vs sdf)
+>   zspaces
+>   char ')'
+>   return x
+> 
+> zparseDottedList = do
+>   char '('
+>   zspaces
+>   x <- parseDottedList
+>   zspaces
+>   char ')'
+>   return x
+288c196,202
+< parseList = liftM List $ sepBy parseExpr spaces
+---
+> parseList = do
+>   head <- sepBy parseExpr spaces --if terminated by sdf), we're done here.
+>   return $ List head
+> parseListWS :: Parser LispVal
+> parseListWS = do
+>   head <- endBy parseExpr spaces --if terminated by sdf ), we're done here.
+>   return $ List head
+317,325d230
+< showVal (PrimitiveFunc _ ) = "<primitive>" --for brevity, only show the fact that the value is a primitive.
+< --note: in the following, the LHSs inside the {} are the record attributes of LispVal FunFunc, and the RHS are holding their values!  so it's like a backwards-assignment (the right-hand-side gets the value starting in the LHS) compared to something like C++
+< showVal (Func {params = args, vararg = varargs, body = body, closure = env}) = 
+<     "(lambda (" ++ unwords (map show args ) ++ (case varargs of
+<         Nothing -> ""
+<         Just arg -> " . " ++ arg) ++ ") ...)"
+<         --if there's a variadic argument, show it after a dot
+< showVal (Port _ ) = "<IO port>"
+< showVal (IOFunc _) = "<IO primitive>"
+328c233
+< {-
+---
+> 
+333d237
+< -} --updated readExpr when we generalized to loading files
+347,428d250
+<             | PrimitiveFunc ([LispVal] -> ThrowsError LispVal)
+<             | Func { params :: [String], vararg :: (Maybe String), body :: [LispVal], closure :: Env} 
+<             --using "record syntax" lets us store data kinda like key-value store or attributes.  more easily keeps track of the info that we wanna store.
+<             --note that we are storing the function body as a list of LispVal (list of expressions, since expressions are essentially LispVal)
+<             --vararg is, if the function is variadic, the name of the variable holding the list of parameters for the variadic part.
+<             | IOFunc ([LispVal] -> IOThrowsError LispVal) --for primitives that handle I/O
+<             | Port Handle --Ports represent input and output devices. To Scheme, an input port is a Scheme object that can deliver characters upon command, while an output port is a Scheme object that can accept characters.
+< 
+< --helper functions for evaluating function definitions ((define ...) and (lambda ...))   
+< makeFunc varargs env params body = return $ Func (map showVal params) varargs body env
+< makeNormalFunc = makeFunc Nothing
+< makeVarArgs = makeFunc . Just . showVal
+< 
+< --have to update eval from ThrowsError (monad) to IOThrowsError (from monad transformer)
+< eval :: Env -> LispVal -> IOThrowsError LispVal
+< eval env val@(String _) = return val--this val@(String _) pattern matches any LispVal with the String constructor, binds "val" as a LispVal instead of just a bare String.
+< eval env val@(Number _) = return val
+< eval env val@(Bool _) = return val
+< eval env (Atom id) = getVar env id
+< eval env (List [Atom "quote", val]) = return val --the eval of (quote val) AKA 'val is val
+< eval env (List [Atom "if", pred, conseq, alt]) =
+<     do 
+<         result <- eval env pred
+<         case result of--the last statement (this case statement) in a do block will be the overall result of the do block.  eval either alt or conseq based on value of eval pred
+<             Bool False -> eval env alt
+<             otherwise -> eval env conseq
+< eval env (List [Atom "set!", Atom var, form]) = eval env form >>= setVar env var
+< eval env (List [Atom "define", Atom var, form]) = eval env form >>= defineVar env var
+< --following are evaluations of function definition expressions
+< --the compiler actually gives warning: [-Woverlapping-patterns] Pattern match is redundant
+< --  i fixed this by moving the pattern for function application down after these.  maybe it gets caught in function application, essentially matching "define" or "lambda" as a function to apply.  that does sound like it could be potentially bad...
+< eval env (List (Atom "define" : List (Atom var : params) : body)) =
+<     makeNormalFunc env params body >>= defineVar env var
+< eval env (List (Atom "define" : DottedList (Atom var : params) varargs : body)) =
+<     makeVarArgs varargs env params body >>= defineVar env var
+< eval env (List (Atom "lambda" : List params : body)) =
+<     makeNormalFunc env params body
+< eval env (List (Atom "lambda" : DottedList params varargs : body)) =
+<     makeVarArgs varargs env params body
+< eval env (List (Atom "lambda" : varargs@(Atom _) : body)) =
+<     makeVarArgs varargs env [] body
+< eval env (List [Atom "load", String filename]) = 
+<     load filename >>= liftM last . mapM (eval env) --handle the Scheme load as a special procedure rather than a general function case.
+<     --we do this because the "load" "function" can introduce bindings into the environment, but our "apply" does not take an environment argument, so our notion of 'function' cannot as-is modify the environment in which it is called.
+< 
+< eval env (List (function : args)) = do --function application.  one eval covers everything!
+<     func <- eval env function
+<     argVals <- mapM (eval env) args
+<     apply func argVals
+< 
+< eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
+< 
+< applyProc :: [LispVal] -> IOThrowsError LispVal --wrapper around "apply" to destructure argument list into the form "apply" expects 
+< applyProc [func, List args] = apply func args -- we use applyProc when we see "apply" in Scheme source (see ioPrimitives list)
+< applyProc (func : args) = apply func args
+< 
+< apply :: LispVal -> [LispVal] -> IOThrowsError LispVal
+< apply (PrimitiveFunc func) args = liftThrows $ func args
+< apply (IOFunc func) args = func args --note that IOFunc has a different type than PrimitiveFUnc! [LispVal] -> ThrowsError LispVal instead of IOThrowsError LispVal.  that's why we need to lift the result of a PrimitiveFunc but not of a IOFunc
+< apply (Func params varargs body closure) args =
+<     if (num params /= num args) && (varargs == Nothing) --need number of params (formals) to be equal to the number of args we're applying it to.
+<         --note that this indicates that in Scheme we are not rly supporting partially applying functions / 'currying'
+<         --btw, we might not be fully error checking here.  to me it looks like the above only checks whether the numargs==numparams IF varargs is not present.  if varargs is present, we should ideally check that the args >= totalParams.
+<             --the resulting error checking might be done in the "drop (length params) args" function
+<         then throwError $ NumArgs (num params) args
+<         else (liftIO $ bindVars closure $ zip params args) >>= bindVarArgs varargs >>= evalBody
+<         --first, bind the multiple parameter-argument pairs to the closure environment.  pass that env along to bind the possible variadic argument.  then pass that env along to evalBody!
+<     where 
+<         remainingArgs = drop (length params) args --get remaining args after parameters are matched
+<         num = toInteger . length
+<         evalBody env = liftM last $ mapM (eval env) body --recall, body is a list of LispVal.  we're mapping eval, with the closure env, to every LispVal in this list.  then the result is the last expression eval'd in that list.
+<         bindVarArgs arg env = case arg of
+<             Just argName -> liftIO $ bindVars env [(argName, List $ remainingArgs)] --bind the variadic parameter name to the list of remaining args
+<             Nothing -> return env --pass the env through unchanged
+< 
+< readOrThrow :: Parser a -> String -> ThrowsError a --for reading FROM FILES
+< readOrThrow parser input = case parse parser "lisp" input of
+<     Left err  -> throwError $ Parser err
+<     Right val -> return val
+< 
+< readExpr = readOrThrow parseExpr --specialization of readOrThrow to read single expressions
+< readExprList = readOrThrow (endBy parseExpr spaces) --for use within loading files
+430,436c252,277
+< primitiveBindings :: IO Env --create the IO Env values from the original list of primitives (which themselves are just tuples of (String, [LispVal] -> ThrowsError LispVal)
+< primitiveBindings = nullEnv >>= (flip bindVars $ map (makeFunc IOFunc) ioPrimitives ++ map (makeFunc PrimitiveFunc) primitives)
+<     where 
+<         makeFunc constructor (var, func) = (var, constructor func)
+<         --makeFunc takes the argument "constructor" to decide whether it takes IOFunc or PrimitiveFunc
+<         -- note: I think IOFunc and Func have different type (ThrowsError and IOThrowsError) but we wrote "apply" such that it knows how to handle this.
+<         --start with nullEnv (empty environment), and bind all the primitives we defined to it.
+---
+> eval :: LispVal -> ThrowsError LispVal
+> eval val@(String _) = return val --this val@(String _) pattern matches any LispVal with the String constructor, binds "val" as a LispVal instead of just a bare String.
+> eval val@(Number _) = return val
+> eval val@(Bool _) = return val
+> eval (List [Atom "quote", val]) = return val --the eval of (quote val) AKA 'val is val
+> eval (List [Atom "if", pred, conseq, alt]) = 
+>      do 
+>         result <- eval pred
+>         case result of --the last statement (this case statement) in a do block will be the overall result of the do block.  eval either alt or conseq based on value of eval pred
+>              Bool False -> eval alt
+>              otherwise  -> eval conseq
+> eval (List (Atom func : args)) = mapM eval args >>= apply func --evaluate all arguments (expressions past the first expression, which is function) then apply function to result
+> eval badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
+> 
+> apply :: String -> [LispVal] -> ThrowsError LispVal
+> apply func args = maybe (throwError $ NotFunction "Unrecognized primitive function args" func)
+>     ($ args) 
+>     (lookup func primitives)
+> --($ x) = (\y -> y $ x) = flip ($) x
+> --so ($ args) implicitly creates a lambda that applies its argument (a function) to args
+> --lookup returns a Maybe function, i believe.
+> --"maybe :: b -> (a -> b) -> Maybe a -> b"
+> -- here, "b" default value is (Bool False)
+> -- function (a->b) is ($ args), the lambda that applies its argument to args
+> -- the Maybe value "Maybe a" is the result of "lookup func primitives"
+> -- if that Maybe result is not Nothing, then maybe applies the function (previously mentioned lambda) to the value inside the Just
+439,509c280,306
+< primitives = [
+<     ("+", numericBinop (+)),
+<     ("-", numericBinop (-)),
+<     ("*", numericBinop (*)),
+<     ("/", numericBinop div),
+<     ("mod", numericBinop mod),
+<     ("quotient", numericBinop quot),
+<     ("remainder", numericBinop rem),
+<     ("=", numBoolBinop (==)),
+<     ("<", numBoolBinop (<)),
+<     (">", numBoolBinop (>)),
+<     ("/=", numBoolBinop (/=)),
+<     (">=", numBoolBinop (>=)),
+<     ("<=", numBoolBinop (<=)),
+<     ("&&", boolBoolBinop (&&)),
+<     ("||", boolBoolBinop (||)),
+<     ("string=?", strBoolBinop (==)),
+<     ("string<?", strBoolBinop (<)),
+<     ("string>?", strBoolBinop (>)),
+<     ("string<=?", strBoolBinop (<=)),
+<     ("string>=?", strBoolBinop (>=)),
+<     ("car", car),
+<     ("cdr", cdr),
+<     ("cons", cons),
+<     ("eq?", eqv),
+<     ("eqv?", eqv),
+<     ("equal?", equal)
+<     ]
+< 
+< ioPrimitives :: [(String, [LispVal] -> IOThrowsError LispVal)]
+< ioPrimitives = [
+<     ("apply", applyProc),
+<     ("open-input-file", makePort ReadMode),
+<     ("open-output-file", makePort WriteMode),
+<     ("close-input-port", closePort),
+<     ("close-output-port", closePort),
+<     ("read", readProc),
+<     ("write", writeProc),
+<     ("read-contents", readContents),
+<     ("read-all", readAll)
+<     ]
+< --note here: read-contents and read-all take String filename, whereas read takes port! using the wrong thing here gives a Haskell runtime error
+< 
+< makePort :: IOMode -> [LispVal] -> IOThrowsError LispVal --openFile is the haskell function openFile :: FilePath -> IOMode -> IO Handle
+< makePort mode [String filename] = liftM Port $ liftIO $ openFile filename mode
+< --"intended to be partially-applied to the IOMode: ReadMode for open-input-file and WriteMode for open-output-file"
+< 
+< closePort :: [LispVal] -> IOThrowsError LispVal --hClose is the haskell function hClose :: Handle -> IO ()
+< closePort [Port port] = liftIO $ hClose port >> (return $ Bool True) --when we match a port, close it then return true
+< closePort _ = return $ Bool False --if we didn't match a port, return false?
+< 
+< readProc :: [LispVal] -> IOThrowsError LispVal
+< readProc [] = readProc [Port stdin]
+< readProc [Port port] = (liftIO $ hGetLine port) >>= liftThrows . readExpr
+< readProc _ = return $ Bool False --without this, we get a runtime error if user accidentally uses String instead of Port
+<     --ideally we would figure out how to wrap this into the error handling typical of this implementation, but for now we'll just return #f.
+< --hGetLine is the haskell function hGetLine :: Handle -> IO String
+< 
+< writeProc :: [LispVal] -> IOThrowsError LispVal --converts a LispVal to a string and then writes it out on the specified port:
+< writeProc [obj] = writeProc [obj, Port stdout]
+< writeProc [obj, Port port] = liftIO $ hPrint port obj >> (return $ Bool True)
+< 
+< readContents :: [LispVal] -> IOThrowsError LispVal --haskell's readFile just does what it sounds like
+< --readFile :: FilePath -> IO String (but as usual, with haskell IO, we don't return a String, we return an IO String - the promise of computing a string when requested, roughly.)
+< readContents [String filename] = liftM String $ liftIO $ readFile filename
+< 
+< load :: String -> IOThrowsError [LispVal] --read in a file of statements.  note: this is not Scheme's (load ).  this just reads a file.
+< load filename = (liftIO $ readFile filename) >>= liftThrows . readExprList
+< 
+< readAll :: [LispVal] -> IOThrowsError LispVal --wraps the result of load into a List (LispVal constructor) and lift to IOThrowsError
+< readAll [String filename] = liftM List $ load filename
+---
+> primitives = [("+", numericBinop (+)),
+>   ("-", numericBinop (-)),
+>   ("*", numericBinop (*)),
+>   ("/", numericBinop div),
+>   ("mod", numericBinop mod),
+>   ("quotient", numericBinop quot),
+>   ("remainder", numericBinop rem),
+>   ("=", numBoolBinop (==)),
+>   ("<", numBoolBinop (<)),
+>   (">", numBoolBinop (>)),
+>   ("/=", numBoolBinop (/=)),
+>   (">=", numBoolBinop (>=)),
+>   ("<=", numBoolBinop (<=)),
+>   ("&&", boolBoolBinop (&&)),
+>   ("||", boolBoolBinop (||)),
+>   ("string=?", strBoolBinop (==)),
+>   ("string<?", strBoolBinop (<)),
+>   ("string>?", strBoolBinop (>)),
+>   ("string<=?", strBoolBinop (<=)),
+>   ("string>=?", strBoolBinop (>=)),
+>   ("car", car),
+>   ("cdr", cdr),
+>   ("cons", cons),
+>   ("eq?", eqv),
+>   ("eqv?", eqv),
+>   ("equal?", equal)
+>   ]
+609d405
+<     --but note that this laziness is bad.  bc now eqv will recurse into recursed lists, instead of 'equal'.  so this would be something to improve in the future.
+616c412
+< main = do 
+---
+> main = do
+618,620c414,415
+<     case length args of
+<         0 -> runRepl --if no arguments, enter REPL!
+<         otherwise -> runOne $ args 
+---
+>     evaled <- return $ liftM show $ readExpr ( args !! 0 ) >>= eval
+>     putStrLn $ extractValue $ trapError evaled
