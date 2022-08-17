@@ -12,3 +12,22 @@
 (define negative? ( curry > 0))
 (define (odd? num) (= (mod num 2) 1))
 (define (even? num) (not (odd? num)))
+
+(define (foldr f accumulator lst)
+  (if (null? lst)
+    accumulator
+    (f (car lst) (foldr f end (cdr lst )))
+  )
+)
+
+(define foldl (lambda (f accumulator lst)
+                (if (null? lst)
+                  accumulator
+                  (foldl f (f accumulator (car lst)) (cdr lst))
+                )
+              )
+)
+
+(define reduce foldr)
+(define fold foldl)
+
