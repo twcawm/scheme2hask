@@ -16,7 +16,7 @@
 (define (foldr f accumulator lst)
   (if (null? lst)
     accumulator
-    (f (car lst) (foldr f end (cdr lst )))
+    (f (car lst) (foldr f accumulator (cdr lst )))
   )
 )
 
@@ -31,3 +31,21 @@
 (define reduce foldr)
 (define fold foldl)
 
+(define (unfold f init pred)
+  (if (pred init)
+    (cons init '())
+    (cons init (unfold f (f init) pred ))
+  )
+)
+
+(define (sum . l) (fold + 0 l))
+(define (product . l) (fold * 1 l))
+(define (and . l) (fold && #t l))
+(define (or . l) (fold && #f l))
+
+(define (max first . rest) (fold (lambda (prev curr) (if (> prev curr) prev curr)) first rest))
+(define (min first . rest) (fold (lambda (prev curr) (if (< prev curr) prev curr)) first rest))
+
+(define (length l) (fold (lambda (x y) (+ x 1)) 0 l))
+(define (reverse l) (fold (flip cons) '() l))
+(define (revwrong l) (foldr (flip cons) '() l ))
