@@ -49,3 +49,8 @@
 (define (length l) (fold (lambda (x y) (+ x 1)) 0 l))
 (define (reverse l) (fold (flip cons) '() l))
 (define (revwrong l) (foldr (flip cons) '() l ))
+
+(define (mem-helper pred op) (lambda (accum next) (if (and (not accum) (pred (op next))) next accum)))
+(define (memq obj lst) (fold (mem-helper (curry eq? obj) id) #f lst))
+(define (memv obj lst) (fold (mem-helper (curry eqv? obj) id) #f lst))
+(define (member obj lst) (fold (mem-helper (curry equal? obj) id) #f lst))
