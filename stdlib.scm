@@ -54,3 +54,13 @@
 (define (memq obj lst) (fold (mem-helper (curry eq? obj) id) #f lst))
 (define (memv obj lst) (fold (mem-helper (curry eqv? obj) id) #f lst))
 (define (member obj lst) (fold (mem-helper (curry equal? obj) id) #f lst))
+
+(define (map f lst) 
+  (foldr 
+         (lambda (x y) 
+            (cons (f x) y)
+         ) 
+         '() 
+         lst
+  )
+)
