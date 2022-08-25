@@ -57,10 +57,24 @@
 
 (define (map f lst) 
   (foldr 
-         (lambda (x y) 
-            (cons (f x) y)
-         ) 
-         '() 
-         lst
+    (lambda (x y) 
+      (cons (f x) y)
+      ) 
+    '() 
+    lst
   )
 )
+
+(define (filter pred lst)
+  (foldr 
+    (lambda (x y)
+      (if (pred x)
+        (cons x y)
+        y
+      )
+    )
+  '()
+  lst
+  )
+)
+         
