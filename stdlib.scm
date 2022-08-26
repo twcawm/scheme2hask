@@ -1,4 +1,4 @@
-(define (not x) (if x #f #t))
+(define (not x) (if x #f #t)); do comments work?
 (define (null? obj) (if (eqv? obj '()) #t #f))
 (define (list . objs) objs)
 (define (id obj) obj)

@@ -269,12 +269,17 @@ parseExpr = parseAtom --accept any of the following parsed types
         <|> try zparseList --upgrading parseList and parseDottedList because they don't allow leading or trailing whitespace after ( or before ) !
         <|> try zparseDottedList
 
+semiComment = do
+    char ';'
+    manyTill anyChar (lookAhead newline)
+
 zparseList = do
   char '('
   zspaces
   x <- try parseList <|> parseListWS --tricky case ending list with sdf ) vs sdf)
   zspaces
   char ')'
+  optional semiComment
   return x
 
 zparseDottedList = do
