@@ -270,6 +270,7 @@ parseExpr = parseAtom --accept any of the following parsed types
         <|> try zparseDottedList
 
 semiComment = do
+    manyTill space (lookAhead (char ';' ))
     char ';'
     manyTill anyChar (lookAhead newline)
 
@@ -279,7 +280,8 @@ zparseList = do
   x <- try parseList <|> parseListWS --tricky case ending list with sdf ) vs sdf)
   zspaces
   char ')'
-  optional semiComment
+  --zspaces
+  optional (try semiComment)
   return x
 
 zparseDottedList = do
@@ -288,6 +290,8 @@ zparseDottedList = do
   x <- parseDottedList
   zspaces
   char ')'
+  --zspaces
+  --optional semiComment
   return x
         --the "try" is needed because parseNumber, parseBool, and parseCharacter can all start with hash
 

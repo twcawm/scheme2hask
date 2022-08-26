@@ -1,5 +1,5 @@
 (define (not x) (if x #f #t)); do comments work?
-(define (null? obj) (if (eqv? obj '()) #t #f))
+(define (null? obj) (if (eqv? obj '()) #t #f)) ; they might
 (define (list . objs) objs)
 (define (id obj) obj)
 (define (flip func) (lambda (arg1 arg2) (func arg2 arg1)))
