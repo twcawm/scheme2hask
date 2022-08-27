@@ -1,7 +1,5 @@
 # scheme2hask
 
-note: even though we improved handling of comments, the way we did it means we can currently only handle 1 comment per line/expression.  
-if we encounter multiple comments in a row, the rest of the file is not parsed.  
-this could be something to understand/fix later.
-I actually would prefer to handle comments as a pre-processing step.  currently we are not doing that.
-currently we are trying to handle comments during actual parsing of expressions, which I do not prefer.  but the way this parser was designed is convoluted enough that it is difficult to understand where preprocessing should go.
+improved parser in several ways relative to the reference.
+1. most importantly, we can handle arbitrary white space after open paren & before close paren, for all types of lists.  this was not supported in the reference case.
+2. we also added the ability to handle semicolon comments.  I would prefer to have done this as some kind of pre-processing step, but we implemented it into the actual parser.  the one advantage of this in principle is that theoretically we could use comments in some semantic way.  but obviously that goes against the common sense of what comments typically mean.

@@ -268,6 +268,12 @@ parseExpr = parseAtom --accept any of the following parsed types
         <|> parseQuoted
         <|> try zparseList --upgrading parseList and parseDottedList because they don't allow leading or trailing whitespace after ( or before ) !
         <|> try zparseDottedList
+        <|> try zparseComment
+
+zparseComment :: Parser LispVal
+zparseComment = do
+    s <- semiComment
+    return $ Comment s --really, I'm not even sure this should be a LispVal.  But we're going to try this out.  I'd prefer to handle comments in some pre-processing step.  yet here we are...
 
 semiComment = do
     manyTill space (lookAhead (char ';' ))
@@ -353,6 +359,7 @@ showVal (Func {params = args, vararg = varargs, body = body, closure = env}) =
         --if there's a variadic argument, show it after a dot
 showVal (Port _ ) = "<IO port>"
 showVal (IOFunc _) = "<IO primitive>"
+showVal (Comment s) = "<comment>"
 
 instance Show LispVal where show = showVal --declaring/defining LispVal to be an instance of Show typeclass
 {-
@@ -381,6 +388,7 @@ data LispVal = Atom String
             --vararg is, if the function is variadic, the name of the variable holding the list of parameters for the variadic part.
             | IOFunc ([LispVal] -> IOThrowsError LispVal) --for primitives that handle I/O
             | Port Handle --Ports represent input and output devices. To Scheme, an input port is a Scheme object that can deliver characters upon command, while an output port is a Scheme object that can accept characters.
+            | Comment String
 
 --helper functions for evaluating function definitions ((define ...) and (lambda ...))   
 makeFunc varargs env params body = return $ Func (map showVal params) varargs body env
@@ -393,6 +401,7 @@ eval env val@(String _) = return val--this val@(String _) pattern matches any Li
 eval env val@(Number _) = return val
 eval env val@(Bool _) = return val
 eval env (Atom id) = getVar env id
+eval env val@(Comment c) = return val --this is ugly but we're trying to figure out how to handle "comments" , which should really be "do nothing"
 eval env (List [Atom "quote", val]) = return val --the eval of (quote val) AKA 'val is val
 eval env (List [Atom "if", pred, conseq, alt]) =
     do 
